@@ -41,4 +41,5 @@ Two circles (Red & Blue) spawn into an arena, take damage, pick up items, and â€
 This repo includes a convenience script:
 
 ```bash
-
+chmod +x run.sh
+./run.sh
