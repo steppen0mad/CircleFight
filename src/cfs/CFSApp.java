@@ -59,71 +59,140 @@ public class CFSApp {
         List<DamageText> dmgTexts = new ArrayList<>();
         float spawnTimer = nextSpawn(rng);
 
+        // History
+        List<Snapshot> history = new ArrayList<>();
+        history.add(new Snapshot(blue, red, items, dmgTexts, spawnTimer));
+        int frameIndex = 0;
+        boolean paused = false;
+
+        // UI Buttons
+        int btnSize = 40;
+        int btnGap = 10;
+        int btnY = 10;
+        int totalBtnW = 3 * btnSize + 2 * btnGap;
+        int btnX = (W - totalBtnW) / 2;
+        
+        Raylib.Rectangle rwBtn = new Raylib.Rectangle().x(btnX).y(btnY).width(btnSize).height(btnSize);
+        Raylib.Rectangle ppBtn = new Raylib.Rectangle().x(btnX + btnSize + btnGap).y(btnY).width(btnSize).height(btnSize);
+        Raylib.Rectangle ffBtn = new Raylib.Rectangle().x(btnX + 2*(btnSize + btnGap)).y(btnY).width(btnSize).height(btnSize);
+
         float accumulator = 0f;
-        boolean running = true;
 
-        while (running && !WindowShouldClose()) {
+        while (!WindowShouldClose()) {
             float frameDt = GetFrameTime();
-            accumulator += (frameDt > MAX_FRAME ? MAX_FRAME : frameDt);
+            
+            // Input Handling
+            Raylib.Vector2 mouse = GetMousePosition();
+            boolean mouseDown = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            boolean mousePressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+            
+            boolean rewinding = false;
+            boolean fastForwarding = false;
 
-            // Live tuning (optional): ] bigger, [ smaller; I/J/K/L to nudge center
-            if (IsKeyPressed(KEY_RIGHT_BRACKET)) SAW_RING_SCALE += 0.05f;
-            if (IsKeyPressed(KEY_LEFT_BRACKET))  SAW_RING_SCALE = Math.max(1.05f, SAW_RING_SCALE - 0.05f);
-            if (IsKeyPressed(KEY_J)) SAW_RING_OFFSET_X -= 1f;
-            if (IsKeyPressed(KEY_L)) SAW_RING_OFFSET_X += 1f;
-            if (IsKeyPressed(KEY_I)) SAW_RING_OFFSET_Y -= 1f;
-            if (IsKeyPressed(KEY_K)) SAW_RING_OFFSET_Y += 1f;
-
-            // Spin equipped saws
-            if (blue.hasSaw) blue.sawAngle = (blue.sawAngle + SAW_SPIN_DPS * frameDt) % 360f;
-            if (red.hasSaw)  red.sawAngle  = (red.sawAngle  + SAW_SPIN_DPS * frameDt) % 360f;
-
-            // Spawning
-            spawnTimer -= frameDt;
-            if (spawnTimer <= 0f) {
-                items.add(Item.spawnRandom(arena, rng));
-                spawnTimer = nextSpawn(rng);
+            if (CheckCollisionPointRec(mouse, rwBtn)) {
+                if (mouseDown) rewinding = true;
+            }
+            if (CheckCollisionPointRec(mouse, ffBtn)) {
+                if (mouseDown) fastForwarding = true;
+            }
+            if (CheckCollisionPointRec(mouse, ppBtn)) {
+                if (mousePressed) paused = !paused;
             }
 
-            // Fixed-step physics
-            float maxImpactThisFrame = 0f;
-            while (accumulator >= FIXED_DT) {
-                float impact = Physics.step(blue, red, arena, FIXED_DT);
-                if (impact > maxImpactThisFrame) maxImpactThisFrame = impact;
-                accumulator -= FIXED_DT;
+            // Logic
+            if (rewinding) {
+                frameIndex = Math.max(0, frameIndex - 5);
+                Snapshot snap = history.get(frameIndex);
+                snap.restore(blue, red, items, dmgTexts);
+                spawnTimer = snap.getSpawnTimer();
+                paused = true; 
+            } else if (fastForwarding) {
+                if (frameIndex < history.size() - 1) {
+                    frameIndex = Math.min(history.size() - 1, frameIndex + 5);
+                    Snapshot snap = history.get(frameIndex);
+                    snap.restore(blue, red, items, dmgTexts);
+                    spawnTimer = snap.getSpawnTimer();
+                    paused = true;
+                } else {
+                    paused = false; // Resume live if at end
+                }
             }
+            
+            if (!paused && !rewinding) {
+                // If we are in the past, replay
+                if (frameIndex < history.size() - 1) {
+                    frameIndex++;
+                    Snapshot snap = history.get(frameIndex);
+                    snap.restore(blue, red, items, dmgTexts);
+                    spawnTimer = snap.getSpawnTimer();
+                } else {
+                    // Live Simulation
+                    if (blue.hp > 0 && red.hp > 0) {
+                        accumulator += (frameDt > MAX_FRAME ? MAX_FRAME : frameDt);
 
-            // Apply speed-based damage if exactly one has a saw
-            if (maxImpactThisFrame >= MIN_IMPACT_FOR_HIT && (blue.hasSaw ^ red.hasSaw)) {
-                CircleFighter attacker = blue.hasSaw ? blue : red;
-                CircleFighter defender = blue.hasSaw ? red  : blue;
+                        // Live tuning
+                        if (IsKeyPressed(KEY_RIGHT_BRACKET)) SAW_RING_SCALE += 0.05f;
+                        if (IsKeyPressed(KEY_LEFT_BRACKET))  SAW_RING_SCALE = Math.max(1.05f, SAW_RING_SCALE - 0.05f);
+                        if (IsKeyPressed(KEY_J)) SAW_RING_OFFSET_X -= 1f;
+                        if (IsKeyPressed(KEY_L)) SAW_RING_OFFSET_X += 1f;
+                        if (IsKeyPressed(KEY_I)) SAW_RING_OFFSET_Y -= 1f;
+                        if (IsKeyPressed(KEY_K)) SAW_RING_OFFSET_Y += 1f;
 
-                int dmg = computeDamage(maxImpactThisFrame);
-                defender.hp = Math.max(0, defender.hp - dmg);
-                attacker.hasSaw = false;
+                        // Spin equipped saws
+                        if (blue.hasSaw) blue.sawAngle = (blue.sawAngle + SAW_SPIN_DPS * frameDt) % 360f;
+                        if (red.hasSaw)  red.sawAngle  = (red.sawAngle  + SAW_SPIN_DPS * frameDt) % 360f;
 
-                dmgTexts.add(new DamageText(
-                    defender.x,
-                    defender.y - defender.radius - 12f,
-                    "-" + dmg,
-                    0.9f,
-                    -80f
-                ));
+                        // Spawning
+                        spawnTimer -= frameDt;
+                        if (spawnTimer <= 0f) {
+                            items.add(Item.spawnRandom(arena, rng));
+                            spawnTimer = nextSpawn(rng);
+                        }
+
+                        // Fixed-step physics
+                        float maxImpactThisFrame = 0f;
+                        while (accumulator >= FIXED_DT) {
+                            float impact = Physics.step(blue, red, arena, FIXED_DT);
+                            if (impact > maxImpactThisFrame) maxImpactThisFrame = impact;
+                            accumulator -= FIXED_DT;
+                        }
+
+                        // Apply speed-based damage if exactly one has a saw
+                        if (maxImpactThisFrame >= MIN_IMPACT_FOR_HIT && (blue.hasSaw ^ red.hasSaw)) {
+                            CircleFighter attacker = blue.hasSaw ? blue : red;
+                            CircleFighter defender = blue.hasSaw ? red  : blue;
+
+                            int dmg = computeDamage(maxImpactThisFrame);
+                            defender.hp = Math.max(0, defender.hp - dmg);
+                            attacker.hasSaw = false;
+
+                            dmgTexts.add(new DamageText(
+                                defender.x,
+                                defender.y - defender.radius - 12f,
+                                "-" + dmg,
+                                0.9f,
+                                -80f
+                            ));
+                        }
+
+                        // Pickups
+                        for (int i = items.size() - 1; i >= 0; i--) {
+                            Item it = items.get(i);
+                            if (touches(blue, it)) { onPickup(blue, red, it); items.remove(i); continue; }
+                            if (touches(red,  it)) { onPickup(red,  blue, it); items.remove(i); }
+                        }
+
+                        // Update floating damage
+                        for (int i = dmgTexts.size()-1; i >= 0; i--) {
+                            if (!dmgTexts.get(i).update(frameDt)) dmgTexts.remove(i);
+                        }
+
+                        // Save Snapshot
+                        history.add(new Snapshot(blue, red, items, dmgTexts, spawnTimer));
+                        frameIndex++;
+                    }
+                }
             }
-
-            // Pickups
-            for (int i = items.size() - 1; i >= 0; i--) {
-                Item it = items.get(i);
-                if (touches(blue, it)) { onPickup(blue, red, it); items.remove(i); continue; }
-                if (touches(red,  it)) { onPickup(red,  blue, it); items.remove(i); }
-            }
-
-            // Update floating damage
-            for (int i = dmgTexts.size()-1; i >= 0; i--) {
-                if (!dmgTexts.get(i).update(frameDt)) dmgTexts.remove(i);
-            }
-
-            if (blue.hp <= 0 || red.hp <= 0) running = false;
 
             // Draw
             BeginDrawing();
@@ -147,12 +216,46 @@ public class CFSApp {
 
             for (DamageText dt : dmgTexts) dt.draw();
 
-            if (!running) {
+            if (blue.hp <= 0 || red.hp <= 0) {
                 String msg = (blue.hp <= 0 && red.hp <= 0) ? "Draw"
                              : (blue.hp <= 0) ? "Red Wins!" : "Blue Wins!";
                 int tw = MeasureText(msg, 36);
                 DrawText(msg, (W - tw)/2, arena.y + arena.h/2 - 18, 36, RAYWHITE);
             }
+            
+            // Draw UI Buttons
+            DrawRectangleRec(rwBtn, LIGHTGRAY);
+            DrawRectangleRec(ppBtn, LIGHTGRAY);
+            DrawRectangleRec(ffBtn, LIGHTGRAY);
+            
+            // Icons
+            // RW: <<
+            DrawTriangle(new Raylib.Vector2().x(rwBtn.x() + 28).y(rwBtn.y() + 10),
+                         new Raylib.Vector2().x(rwBtn.x() + 28).y(rwBtn.y() + 30),
+                         new Raylib.Vector2().x(rwBtn.x() + 12).y(rwBtn.y() + 20), BLACK);
+            DrawTriangle(new Raylib.Vector2().x(rwBtn.x() + 18).y(rwBtn.y() + 10),
+                         new Raylib.Vector2().x(rwBtn.x() + 18).y(rwBtn.y() + 30),
+                         new Raylib.Vector2().x(rwBtn.x() + 2).y(rwBtn.y() + 20), BLACK);
+            
+            // Play/Pause
+            if (paused) {
+                // Play icon >
+                DrawTriangle(new Raylib.Vector2().x(ppBtn.x() + 10).y(ppBtn.y() + 10),
+                             new Raylib.Vector2().x(ppBtn.x() + 10).y(ppBtn.y() + 30),
+                             new Raylib.Vector2().x(ppBtn.x() + 30).y(ppBtn.y() + 20), BLACK);
+            } else {
+                // Pause icon ||
+                DrawRectangle((int)ppBtn.x() + 10, (int)ppBtn.y() + 10, 6, 20, BLACK);
+                DrawRectangle((int)ppBtn.x() + 24, (int)ppBtn.y() + 10, 6, 20, BLACK);
+            }
+            
+            // FF: >>
+            DrawTriangle(new Raylib.Vector2().x(ffBtn.x() + 12).y(ffBtn.y() + 10),
+                         new Raylib.Vector2().x(ffBtn.x() + 28).y(ffBtn.y() + 20),
+                         new Raylib.Vector2().x(ffBtn.x() + 12).y(ffBtn.y() + 30), BLACK);
+            DrawTriangle(new Raylib.Vector2().x(ffBtn.x() + 22).y(ffBtn.y() + 10),
+                         new Raylib.Vector2().x(ffBtn.x() + 38).y(ffBtn.y() + 20),
+                         new Raylib.Vector2().x(ffBtn.x() + 22).y(ffBtn.y() + 30), BLACK);
 
             EndDrawing();
         }
