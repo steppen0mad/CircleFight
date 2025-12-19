@@ -42,7 +42,3 @@ This repo includes a convenience script:
 
 ```bash
 
-<div style="display: flex; gap: 10px; justify-content: center;">
-  <img src="screenshots/heartitem.png" alt="heartitem" width="400"/>
-  <img src="screenshots/heal.png" alt="heal" width="400"/>
-</div>
